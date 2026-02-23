@@ -1,77 +1,93 @@
+# nolint start
 library(readr)
 library(dplyr)
 library(stringr)
 
-# --- Helper: parse book list files ---
-# Expected format: "Title by/- Author" per line
-# We extract just the title portion (before "by" or "-" delimiter)
-parse_book_titles <- function(filepath) {
+# --- Helper: parse book list files into title + author ---
+# Format: <Title> by <Author>
+parse_books <- function(filepath) {
   lines <- readLines(filepath, warn = FALSE)
   lines <- trimws(lines)
-  lines <- lines[lines != ""]  # drop blank lines
+  lines <- lines[lines != ""]
 
-  # Split on " by " or " - " to isolate the title
-  titles <- str_trim(str_replace(lines, "\\s+(by|-)\\s+.*$", ""))
-  titles
+  books <- lapply(lines, function(line) {
+    parts <- str_split_fixed(line, "\\s+by\\s+", 2)
+    list(title = str_trim(parts[1, 1]), author = str_trim(parts[1, 2]))
+  })
+  books
 }
 
-# --- Build regex pattern for matching (case-insensitive partial match) ---
-build_pattern <- function(titles) {
-  if (length(titles) == 0) return(NULL)
-  escaped <- str_replace_all(titles, "([\\\\\\[\\](){}.*+?^$|])", "\\\\\\1")
-  paste(escaped, collapse = "|")
+# --- Helper: extract word set from a string (lowercase, no punctuation) ---
+to_word_set <- function(text) {
+  text <- tolower(text)
+  text <- str_replace_all(text, "[^a-z0-9\\s]", "")  # strip punctuation
+  words <- str_split(str_squish(text), "\\s+")[[1]]
+  words[words != ""]
+}
+
+# --- Helper: find which group a CSV row belongs to (or NA if no match) ---
+find_group <- function(csv_title, csv_creator, group_lists) {
+  title_words <- to_word_set(csv_title)
+  creator_words <- to_word_set(csv_creator)
+  for (g in names(group_lists)) {
+    for (book in group_lists[[g]]) {
+      tw <- to_word_set(book$title)
+      if (length(tw) == 0 || !all(tw %in% title_words)) next
+      aw <- to_word_set(book$author)
+      if (length(aw) == 0 || all(aw %in% creator_words)) {
+        return(g)
+      }
+    }
+  }
+  NA_character_
 }
 
 # --- Load book lists ---
-lgbt_titles <- parse_book_titles("GroupProject/LGBTBooks.txt")
-control_titles <- parse_book_titles("GroupProject/ControlBooks.txt")
-treatment_titles <- parse_book_titles("GroupProject/TreatmentBooks.txt")
-all_titles <- c(lgbt_titles, control_titles, treatment_titles)
+#lgbt_books <- parse_books("GroupProject/LGBTBooks.txt")
+control_books <- parse_books("GroupProject/ControlBooks.txt")
+#treatment_books <- parse_books("GroupProject/TreatmentBooks.txt")
+all_books <- c(control_books) #c(lgbt_books, control_books, treatment_books)
 
-cat("LGBT titles loaded:", length(lgbt_titles), "\n")
-cat("Control titles loaded:", length(control_titles), "\n")
-cat("Treatment titles loaded:", length(treatment_titles), "\n")
+#cat("LGBT books loaded:", length(lgbt_books), "\n")
+cat("Control books loaded:", length(control_books), "\n")
+#cat("Treatment books loaded:", length(treatment_books), "\n")
 
-lgbt_pattern <- build_pattern(lgbt_titles)
-control_pattern <- build_pattern(control_titles)
-treatment_pattern <- build_pattern(treatment_titles)
-combined_pattern <- build_pattern(all_titles)
+group_lists <- list(
+#  "LGBT" = lgbt_books,
+  #"Treatment" = treatment_books,
+ "Control" = control_books
+)
 
-# --- Process all CSVs in raw_data ---
-csv_files <- list.files("GroupProject/raw_data", pattern = "\\.csv$", full.names = TRUE)
-all_filtered <- list()
+# --- Process existing filtered_books.csv ---
+cat("\nProcessing: GroupProject/filtered_books.csv\n")
+data <- read_csv("GroupProject/filtered_books.csv", show_col_types = FALSE)
+cat("Rows in file:", nrow(data), "\n")
 
-for (input_file in csv_files) {
-  cat("\nProcessing:", input_file, "\n")
-  data <- read_csv(input_file, show_col_types = FALSE)
-  cat("Rows in file:", nrow(data), "\n")
+# Ensure Creator column exists (fill NA with empty string)
+data <- data %>% mutate(Creator = ifelse(is.na(Creator), "", Creator))
 
-  # --- Filter to only treatment + control books ---
-  if (!is.null(combined_pattern)) {
-    filtered_data <- data %>%
-      filter(str_detect(Title, regex(combined_pattern, ignore_case = TRUE)))
-  } else {
-    filtered_data <- tibble()
+# --- Filter and tag in one pass ---
+n <- nrow(data)
+book_groups <- character(n)
+
+for (i in seq_len(n)) {
+  book_groups[i] <- find_group(data$Title[i], data$Creator[i], group_lists)
+  if (i %% 10000 == 0) {
+    cat("  Processed", i, "of", n, "rows...\n")
   }
-
-  # --- Tag each row as LGBT, Treatment, or Control ---
-  filtered_data <- filtered_data %>%
-    mutate(BookGroup = case_when(
-      !is.null(lgbt_pattern) & str_detect(Title, regex(lgbt_pattern, ignore_case = TRUE)) ~ "LGBT",
-      !is.null(treatment_pattern) & str_detect(Title, regex(treatment_pattern, ignore_case = TRUE)) ~ "Treatment",
-      !is.null(control_pattern) & str_detect(Title, regex(control_pattern, ignore_case = TRUE)) ~ "Control",
-      TRUE ~ NA_character_
-    ))
-
-  cat("  LGBT:", sum(filtered_data$BookGroup == "LGBT", na.rm = TRUE),
-      " Treatment:", sum(filtered_data$BookGroup == "Treatment", na.rm = TRUE),
-      " Control:", sum(filtered_data$BookGroup == "Control", na.rm = TRUE), "\n")
-
-  all_filtered <- append(all_filtered, list(filtered_data))
 }
+cat("  Processed", n, "of", n, "rows (done)\n")
 
-# --- Combine and write single output ---
-filtered_all <- bind_rows(all_filtered)
-write_csv(filtered_all, "GroupProject/filtered_books.csv")
-cat("\nAll years combined:", nrow(filtered_all), "rows\n")
-cat("Written to GroupProject/filtered_books.csv\n")
+data$BookGroup <- book_groups
+filtered_data <- data %>% filter(!is.na(BookGroup))
+
+cat("  LGBT:", sum(filtered_data$BookGroup == "LGBT", na.rm = TRUE),
+    " Treatment:", sum(filtered_data$BookGroup == "Treatment", na.rm = TRUE),
+    " Control:", sum(filtered_data$BookGroup == "Control", na.rm = TRUE), "\n")
+
+# --- Write output ---
+write_csv(filtered_data, "GroupProject/filtered_books_v2.csv")
+cat("\nTotal filtered rows:", nrow(filtered_data), "\n")
+cat("Written to GroupProject/filtered_books_v2.csv\n")
+
+#nolint end
