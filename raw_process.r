@@ -43,19 +43,19 @@ find_group <- function(csv_title, csv_creator, group_lists) {
 }
 
 # --- Load book lists ---
-#lgbt_books <- parse_books("GroupProject/LGBTBooks.txt")
+lgbt_books <- parse_books("GroupProject/LGBTBooks.txt")
 control_books <- parse_books("GroupProject/ControlBooks.txt")
-#treatment_books <- parse_books("GroupProject/TreatmentBooks.txt")
-all_books <- c(control_books) #c(lgbt_books, control_books, treatment_books)
+treatment_books <- parse_books("GroupProject/TreatmentBooks.txt")
+all_books <- c(lgbt_books, control_books, treatment_books)
 
-#cat("LGBT books loaded:", length(lgbt_books), "\n")
+cat("LGBT books loaded:", length(lgbt_books), "\n")
 cat("Control books loaded:", length(control_books), "\n")
-#cat("Treatment books loaded:", length(treatment_books), "\n")
+cat("Treatment books loaded:", length(treatment_books), "\n")
 
 group_lists <- list(
-#  "LGBT" = lgbt_books,
-  #"Treatment" = treatment_books,
- "Control" = control_books
+  "LGBT" = lgbt_books,
+  "Treatment" = treatment_books,
+  "Control" = control_books
 )
 
 # --- Process existing filtered_books.csv ---
