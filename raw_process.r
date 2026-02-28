@@ -58,36 +58,42 @@ group_lists <- list(
   "Control" = control_books
 )
 
-# --- Process existing filtered_books.csv ---
-cat("\nProcessing: GroupProject/filtered_books.csv\n")
-data <- read_csv("GroupProject/filtered_books.csv", show_col_types = FALSE)
-cat("Rows in file:", nrow(data), "\n")
+# --- Process all years from raw_data folder ---
+csv_files <- list.files("GroupProject/raw_data", pattern = "\\.csv$", full.names = TRUE)
+cat("\nFound", length(csv_files), "CSV files in raw_data/\n")
 
-# Ensure Creator column exists (fill NA with empty string)
-data <- data %>% mutate(Creator = ifelse(is.na(Creator), "", Creator))
+for (csv_file in csv_files) {
+  cat("\nProcessing:", csv_file, "\n")
+  data <- read_csv(csv_file, show_col_types = FALSE)
+  cat("  Rows in file:", nrow(data), "\n")
 
-# --- Filter and tag in one pass ---
-n <- nrow(data)
-book_groups <- character(n)
+  # Ensure Creator column exists (fill NA with empty string)
+  data <- data %>% mutate(Creator = ifelse(is.na(Creator), "", Creator))
 
-for (i in seq_len(n)) {
-  book_groups[i] <- find_group(data$Title[i], data$Creator[i], group_lists)
-  if (i %% 10000 == 0) {
-    cat("  Processed", i, "of", n, "rows...\n")
+  # --- Filter and tag in one pass ---
+  n <- nrow(data)
+  book_groups <- character(n)
+
+  for (i in seq_len(n)) {
+    book_groups[i] <- find_group(data$Title[i], data$Creator[i], group_lists)
+    if (i %% 10000 == 0) {
+      cat("    Processed", i, "of", n, "rows...\n")
+    }
   }
+  cat("    Processed", n, "of", n, "rows (done)\n")
+
+  data$BookGroup <- book_groups
+  filtered_data <- data %>% filter(!is.na(BookGroup))
+
+  cat("  LGBT:", sum(filtered_data$BookGroup == "LGBT", na.rm = TRUE),
+      " Treatment:", sum(filtered_data$BookGroup == "Treatment", na.rm = TRUE),
+      " Control:", sum(filtered_data$BookGroup == "Control", na.rm = TRUE), "\n")
+
+  # Extract year from filename and write per-year output
+  year <- str_extract(basename(csv_file), "\\d{4}")
+  out_file <- file.path("GroupProject", paste0("filtered_books_", year, ".csv"))
+  write_csv(filtered_data, out_file)
+  cat("  Written to", out_file, "\n")
 }
-cat("  Processed", n, "of", n, "rows (done)\n")
-
-data$BookGroup <- book_groups
-filtered_data <- data %>% filter(!is.na(BookGroup))
-
-cat("  LGBT:", sum(filtered_data$BookGroup == "LGBT", na.rm = TRUE),
-    " Treatment:", sum(filtered_data$BookGroup == "Treatment", na.rm = TRUE),
-    " Control:", sum(filtered_data$BookGroup == "Control", na.rm = TRUE), "\n")
-
-# --- Write output ---
-write_csv(filtered_data, "GroupProject/filtered_books_v2.csv")
-cat("\nTotal filtered rows:", nrow(filtered_data), "\n")
-cat("Written to GroupProject/filtered_books_v2.csv\n")
 
 #nolint end
