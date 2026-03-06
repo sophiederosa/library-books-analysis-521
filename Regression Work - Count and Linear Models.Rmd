@@ -1,0 +1,307 @@
+---
+title: "R Notebook"
+output: pdf_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+library(stats)
+library(xtable)
+library(zoo)
+library(plm)
+library(fixest)
+library(MASS)
+library(jtools)
+library(texreg)
+library(stargazer)
+```
+
+```{r}
+b2015 <- read_csv("Project/filtered_books_2015.csv")
+b2016 <- read_csv("Project/filtered_books_2016.csv")
+b2017 <- read_csv("Project/filtered_books_2017.csv")
+b2018 <- read_csv("Project/filtered_books_2018.csv")
+b2019 <- read_csv("Project/filtered_books_2019.csv")
+b2020 <- read_csv("Project/filtered_books_2020.csv")
+b2021 <- read_csv("Project/filtered_books_2021.csv")
+b2022 <- read_csv("Project/filtered_books_2022.csv")
+b2023 <- read_csv("Project/filtered_books_2023.csv")
+b2024 <- read_csv("Project/filtered_books_2024.csv")
+b2025 <- read_csv("Project/filtered_books_2025.csv")
+```
+
+
+```{r}
+books <- rbind(b2015, b2016, b2017, b2018, b2019, b2020, b2021, b2022, b2023, b2024, b2025)
+
+
+books <- books |>
+  mutate(
+    Date = as.yearmon(paste(CheckoutYear, CheckoutMonth), "%Y %m"),
+    Treated = ifelse(BookGroup == "Treatment", 1, 0),
+    LGBTQ = ifelse(BookGroup == "LGBT", 1, 0),
+    Post = ifelse(Date > "May 2020", 1, 0),
+    Title = str_to_lower(Title),
+    PublicationYear = parse_number(PublicationYear)
+  ) |>
+  drop_na(Checkouts) |>
+  filter(
+    Date > "Jan 2018" & Date < "Jan 2021"
+  )
+
+```
+
+```{r}
+#Change book titles into more consistent format
+
+###############
+#Control Group
+###############
+books$Title <- ifelse(str_detect(books$Title, "how to win friends and influence people"), "How to Win Friends and Influence People", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "art of war"), "The Art of War", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "steve jobs"), "Steve Jobs", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the boys in the boat"), "The Boys in the Boat", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the life-changing magic of tidying up"), "The Life-Changing Magic of Tidying Up", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "wild"), "Wild (Memoir)", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "sapiens"), "Sapiens", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "welcome to the universe"), "Welcome to the Universe: An Astrophysical Tour", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "when breath becomes air"), "When Breath Becomes Air", books$Title)
+
+
+#######################
+#Treatment group (race)
+#######################
+books$Title <- ifelse(str_detect(books$Title, "between the world and me"), "Between the World and Me", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "stamped from the beginning"), "Stamped from the Beginning", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "white rage"), "White Rage", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "how to be an antiracist"), "How to be an Antiracist", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the new jim crow"), "The New Jim Crow", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "white fragility"), "White Fragility", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "so you want to talk about race"), "So You Want to Talk About Race", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "just action"), "Just Action", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "me and white supremacy"), "Me and White Supremacy", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the color of law"), "The Color of Law", books$Title)
+
+
+##############
+#LGBTQ+ Group
+##############
+books$Title <- ifelse(str_detect(books$Title, "gay bar"), "Gay Bar: Why We Went Out", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "borrowed time"), "Borrowed Time: An AIDS Memoir", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "when brooklyn was queer"), "When Brooklyn Was Queer", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "gender outlaw"), "Gender Outlaw", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "when we rise"), "When We Rise", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "bad feminist"), "Bad Feminist", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "bettyville"), "Bettyville", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "hunger"), "Hunger (Memoir)", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "in the dream house"), "In the Dream House", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "naturally tan"), "Naturally Tan", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "shortest way home"), "Shortest Way Home", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the book of"), "The Book of Delights", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "the rules do not apply"), "The Rules Do Not Apply", books$Title)
+books$Title <- ifelse(str_detect(books$Title, "untamed"), "Untamed", books$Title)
+
+```
+
+```{r}
+names_check <- books |>
+  group_by(Title) |>
+  summarize(
+    Author = first(Creator)
+  )
+```
+
+
+```{r}
+books_grouped <- books |>
+  group_by(
+    Date,
+    Title
+    ) |>
+  summarize(
+    Author = first(Creator),
+    Checkouts = sum(Checkouts, na.rm = T),
+    Group = first(BookGroup),
+    Post = first(Post),
+    Treated = first(Treated),
+    LGBTQ = first(LGBTQ),
+    pub_year = min(PublicationYear)
+  ) |>
+  mutate(
+    Date = as.factor(Date),
+    logCheckouts = log(Checkouts)
+    )
+```
+
+
+```{r}
+ggplot(data = books_grouped, aes(x = Checkouts)) +
+  geom_histogram(fill = "blue", binwidth = 10) +
+  theme_classic()
+```
+
+
+```{r}
+group_counts <- books_grouped |>
+  group_by(
+    Date,
+    Group
+  ) |>
+  summarize(
+    count = n()
+  ) |>
+  mutate(
+    Date = as.yearmon(Date)
+  )
+```
+
+```{r}
+ggplot(data = group_counts, aes(x = Date, y = count, color = Group)) +
+  geom_line(linewidth = .75)
+```
+
+
+```{r}
+lin_mod <- lm(data = books_grouped, Checkouts ~ Group*Post)
+summary(lin_mod)
+```
+
+```{r}
+plot(lin_mod)
+```
+
+
+```{r}
+log_lin <- lm(data = books_grouped, logCheckouts ~ Group*Post)
+summary(log_lin)
+```
+
+```{r}
+plot(log_lin)
+
+```
+
+```{r}
+stargazer(lin_mod, log_lin, star.cutoffs = c(.05, .01, .001))
+```
+
+
+```{r}
+mod2 <- lm(data = books_grouped, log(Checkouts) ~ as.factor(Date) + Title + Post:Treated)
+summary(mod2)
+```
+
+```{r}
+plot(lin_mod)
+```
+
+```{r}
+fe_mod_test <- plm(Checkouts ~ Post:Treated:Date + Post:LGBTQ:Date,
+                   data = books_grouped,
+                   index = c("Title", "Date"),
+                   model = "within",
+                   effects = "twoways")
+
+summary(fe_mod_test)
+```
+
+
+```{r}
+books_grouped <- books_grouped |>
+  mutate(
+    fit_vals = fitted(fe_mod_test),
+    resids = fit_vals - Checkouts
+  )
+```
+
+
+```{r}
+groups <- books_grouped |>
+  group_by(
+    Date,
+    Group
+  ) |>
+  summarize(
+    Checkouts = median(Checkouts, na.rm = T)
+  ) |>
+  mutate(
+    Date = as.yearmon(Date)
+  )
+
+```
+
+```{r}
+ggplot(data = groups, aes(x = Date, y = Checkouts, color = Group)) +
+  geom_line(linewidth = .75) +
+  geom_vline(xintercept = as.yearmon(paste(2020, 5), "%Y %m"))
+```
+
+
+```{r}
+mod3 <- lm(data = books_grouped, Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+
+summary(mod3)
+```
+
+```{r}
+plot(mod3)
+```
+
+
+```{r}
+mod4 <- lm(data = books_grouped, logCheckouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+
+summary(mod4)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(mod4)
+```
+
+
+```{r}
+stargazer(mod3, mod4, star.cutoffs = c(.05, .01, .001))
+```
+
+
+# Count models
+
+```{r}
+nb_basic <- glm.nb(data = books_grouped, Checkouts ~ Post*Group)
+
+summary(nb_basic)
+```
+
+```{r}
+plot(nb_basic)
+```
+
+```{r}
+stargazer(nb_basic, star.cutoffs = c(.05, .01, .001))
+```
+
+
+```{r}
+nb_fe <- glm.nb(data = books_grouped, Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+
+summary(nb_fe)
+```
+
+```{r}
+plot(nb_fe)
+```
+
+```{r}
+stargazer(nb_fe, star.cutoffs = c(.05, .01, .001))
+```
+
+
+```{r}
+nb_mod <- fenegbin(data = books_grouped, Checkouts ~ Post:Treated:Date | Date + Title)
+
+summary(nb_mod)
+```
+
