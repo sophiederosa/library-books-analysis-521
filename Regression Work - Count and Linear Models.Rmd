@@ -18,6 +18,10 @@ library(texreg)
 library(stargazer)
 ```
 
+
+# Data Tidying
+
+
 ```{r}
 b2015 <- read_csv("Project/filtered_books_2015.csv")
 b2016 <- read_csv("Project/filtered_books_2016.csv")
@@ -39,7 +43,7 @@ books <- rbind(b2015, b2016, b2017, b2018, b2019, b2020, b2021, b2022, b2023, b2
 
 books <- books |>
   mutate(
-    Date = as.yearmon(paste(CheckoutYear, CheckoutMonth), "%Y %m"),
+    Date = as.yearmon(CheckoutYear + (CheckoutMonth - 1)/12),
     Treated = ifelse(BookGroup == "Treatment", 1, 0),
     LGBTQ = ifelse(BookGroup == "LGBT", 1, 0),
     Post = ifelse(Date > "May 2020", 1, 0),
@@ -48,7 +52,8 @@ books <- books |>
   ) |>
   drop_na(Checkouts) |>
   filter(
-    Date > "Jan 2018" & Date < "Jan 2021"
+    Date > "Jan 2018" & Date < "Jan 2021",
+    Date != "May 2020"
   )
 
 ```
@@ -103,6 +108,13 @@ books$Title <- ifelse(str_detect(books$Title, "the book of"), "The Book of Delig
 books$Title <- ifelse(str_detect(books$Title, "the rules do not apply"), "The Rules Do Not Apply", books$Title)
 books$Title <- ifelse(str_detect(books$Title, "untamed"), "Untamed", books$Title)
 
+
+books <- books |>
+  mutate(
+    Date = as.factor(Date),
+    Title = as.factor(Title)
+  )
+
 ```
 
 ```{r}
@@ -118,22 +130,46 @@ names_check <- books |>
 books_grouped <- books |>
   group_by(
     Date,
-    Title
+    Title,
+    .drop = FALSE
     ) |>
   summarize(
     Author = first(Creator),
     Checkouts = sum(Checkouts, na.rm = T),
     Group = first(BookGroup),
-    Post = first(Post),
-    Treated = first(Treated),
-    LGBTQ = first(LGBTQ),
     pub_year = min(PublicationYear)
   ) |>
   mutate(
-    Date = as.factor(Date),
-    logCheckouts = log(Checkouts)
+    logCheckouts = log(Checkouts + .1), # Avoids getting -Inf for values of zero
+    Date = as.yearmon(Date),
+    pub_year = ifelse(pub_year == Inf, NA, pub_year)
     )
+
+
+books_grouped <- books_grouped |>
+  group_by(Title) |>
+  mutate(
+    Group = unique(Group[!is.na(Group)]),
+    pub_year = min(unique(pub_year[!is.na(pub_year)])),
+    Treated = ifelse(Group == "Treatment", 1, 0),
+    LGBT = ifelse(Group == "LGBT", 1, 0),
+    Post = ifelse(Date > "May 2020", 1, 0)
+  )
+
+
+books_grouped <- books_grouped |>
+  filter(
+    (Checkouts > 0 & Group == "Treatment" & Date > "May 2020") |
+      Group != "Treatment" |
+      Group == "Treatment" & Date < "May 2020"
+  )
+
 ```
+
+
+
+
+# EDA
 
 
 ```{r}
@@ -163,6 +199,71 @@ ggplot(data = group_counts, aes(x = Date, y = count, color = Group)) +
 ```
 
 
+
+```{r}
+groups <- books_grouped |>
+  group_by(
+    Date,
+    Group
+  ) |>
+  summarize(
+    Checkouts = mean(Checkouts, na.rm = T)
+  ) |>
+  mutate(
+    Date = as.yearmon(Date)
+  )
+
+```
+
+```{r}
+ggplot(data = groups, aes(x = Date, y = Checkouts, color = Group)) +
+  geom_line(linewidth = .75) +
+  geom_vline(xintercept = as.yearmon(paste(2020, 5)))
+```
+
+```{r}
+df_plot <- books_grouped |>
+  mutate(
+    Date = as.Date(Date)
+  )
+
+df_plot <- df_plot |>
+  group_by(Group, Date) |>
+  mutate(
+    avgCheckouts = mean(Checkouts)
+  )
+```
+
+
+```{r}
+ggplot(data = df_plot, aes(x = Date)) +
+  geom_line(aes(color = Group, group = Title, y = logCheckouts), alpha = .5) +
+  geom_smooth(aes(color = Group, y = log(avgCheckouts)), method = "loess",
+              method.args = list(span = .1, degree = 2)
+              ) +
+  geom_line(aes(y = log(avgCheckouts), color = Group), linewidth = 1)
+```
+
+
+```{r}
+ggplot(data = subset(df_plot, Treated == 1), aes(x = Date, y = avgCheckouts)) +
+  geom_point() +
+  geom_smooth(method = "loess",
+              method.args = list(span = .5)) +
+  scale_y_continuous(limits = c(0, 700))
+```
+
+
+
+
+
+
+
+# Linear Regresssions
+
+
+## Before and after
+
 ```{r}
 lin_mod <- lm(data = books_grouped, Checkouts ~ Group*Post)
 summary(lin_mod)
@@ -188,59 +289,24 @@ stargazer(lin_mod, log_lin, star.cutoffs = c(.05, .01, .001))
 ```
 
 
-```{r}
-mod2 <- lm(data = books_grouped, log(Checkouts) ~ as.factor(Date) + Title + Post:Treated)
-summary(mod2)
-```
 
-```{r}
-plot(lin_mod)
-```
 
-```{r}
-fe_mod_test <- plm(Checkouts ~ Post:Treated:Date + Post:LGBTQ:Date,
-                   data = books_grouped,
-                   index = c("Title", "Date"),
-                   model = "within",
-                   effects = "twoways")
 
-summary(fe_mod_test)
-```
 
+
+
+
+## Two Way Fixed Effects
 
 ```{r}
 books_grouped <- books_grouped |>
   mutate(
-    fit_vals = fitted(fe_mod_test),
-    resids = fit_vals - Checkouts
+    Date = as.factor(Date)
   )
 ```
 
-
 ```{r}
-groups <- books_grouped |>
-  group_by(
-    Date,
-    Group
-  ) |>
-  summarize(
-    Checkouts = median(Checkouts, na.rm = T)
-  ) |>
-  mutate(
-    Date = as.yearmon(Date)
-  )
-
-```
-
-```{r}
-ggplot(data = groups, aes(x = Date, y = Checkouts, color = Group)) +
-  geom_line(linewidth = .75) +
-  geom_vline(xintercept = as.yearmon(paste(2020, 5), "%Y %m"))
-```
-
-
-```{r}
-mod3 <- lm(data = books_grouped, Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+mod3 <- lm(data = books_grouped, Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBT:Date - 1)
 
 summary(mod3)
 ```
@@ -251,7 +317,7 @@ plot(mod3)
 
 
 ```{r}
-mod4 <- lm(data = books_grouped, logCheckouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+mod4 <- lm(data = books_grouped, logCheckouts ~ Title + Date + Post:Treated:Date + Post:LGBT:Date - 1)
 
 summary(mod4)
 ```
@@ -266,8 +332,21 @@ plot(mod4)
 stargazer(mod3, mod4, star.cutoffs = c(.05, .01, .001))
 ```
 
+```{r}
+xtable(mod3)
+xtable(mod4)
+```
+
+
+
+
+
+
+
 
 # Count models
+
+## Before-and-After
 
 ```{r}
 nb_basic <- glm.nb(data = books_grouped, Checkouts ~ Post*Group)
@@ -284,8 +363,17 @@ stargazer(nb_basic, star.cutoffs = c(.05, .01, .001))
 ```
 
 
+
+
+
+
+## Two way fixed effects
+
 ```{r}
-nb_fe <- glm.nb(data = books_grouped, Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBTQ:Date)
+nb_fe <- glm.nb(
+  data = books_grouped, 
+  Checkouts ~ Title + Date + Post:Treated:Date + Post:LGBT:Date - 1
+  )
 
 summary(nb_fe)
 ```
@@ -298,10 +386,8 @@ plot(nb_fe)
 stargazer(nb_fe, star.cutoffs = c(.05, .01, .001))
 ```
 
-
 ```{r}
-nb_mod <- fenegbin(data = books_grouped, Checkouts ~ Post:Treated:Date | Date + Title)
-
-summary(nb_mod)
+xtable(nb_fe)
 ```
+
 
